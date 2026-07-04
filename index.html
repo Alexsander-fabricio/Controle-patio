@@ -251,7 +251,7 @@
           setGpsStatus("idle");
           if (fileInputRef.current) fileInputRef.current.value = "";
         } catch (err) {
-          setSubmitError("Não foi possível enviar o registro. Verifique sua conexão e tente novamente.");
+          setSubmitError("Erro: " + (err.message || String(err)));
         } finally {
           setSubmitting(false);
         }
