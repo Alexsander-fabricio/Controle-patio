@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Controle de Pátio</title>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useRef, useEffect } = React;
+
+    const SUPABASE_URL = "https://ecyyekbhcsfrzawutzzs.supabase.co";
+    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVjeXlla2JoY3Nmcnphd3V0enpzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMxMDE5MjAsImV4cCI6MjA5ODY3NzkyMH0.P_ULSmtmjiSaN3NgqMPDaGqoeRVXyvokuA-fgaoYvYs";
+
+    async function supabaseFetch(path, options = {}) {
+      const res = await fetch(`${SUPABASE_URL}${path}`, {
+        ...options,
+        headers: { apikey: SUPABASE_ANON_KEY, ...options.headers },
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || `Erro ${res.status}`);
+      }
+      return res;
+    }
+
+    const PAGE_BG = "#EDEAE1";
+    const CARD_BG = "#F7F5EF";
+    const INK = "#2B2620";
+    const INK_SOFT = "#6B6558";
+    const RULE = "#C9C2AF";
+
+    const PRODUCTS = [
+      { id: "SOJA", label: "Soja", color: "#3F6B4F" },
+      { id: "MILHO", label: "Milho", color: "#C68A1F" },
+      { id: "FERTILIZANTE", label: "Fertilizante", color: "#4C6B80" },
+    ];
+
+    const EMPTY_FORM = {
+      produto: "",
+      chegada: "",
+      saida: "",
+      descarga: "",
+      nfe: "",
+      cte: "",
+      viagem: "",
+      transportadora: "",
+      motorista: "",
+      placa: "",
+      origem: "",
+      destino: "",
+      motivo: "",
+    };
+
+    function Perforation({ top }) {
+      return (
+        <div
+          style={{
+            position: "absolute",
+            [top ? "top" : "bottom"]: -9,
+            left: 0,
+            right: 0,
+            height: 18,
+            backgroundImage: `radial-gradient(circle at 9px 9px, ${PAGE_BG} 8px, transparent 8.5px)`,
+            backgroundSize: "18px 18px",
+            backgroundRepeat: "repeat-x",
+            pointerEvents: "none",
+          }}
+        />
+      );
+    }
+
+    function PatioApp() {
+      const [form, setForm] = useState(EMPTY_FORM);
+      const [file, setFile] = useState(null);
+      const [gps, setGps] = useState(null);
+      const [gpsStatus, setGpsStatus] = useState("idle");
+      const [lastTicket, setLastTicket] = useState(null);
+      const [history, setHistory] = useState([]);
+      const [errors, setErrors] = useState([]);
+      const fileInputRef = useRef(null);
+
+      const [view, setView] = useState("motorista");
+      const [authenticated, setAuthenticated] = useState(false);
+      const [accessToken, setAccessToken] = useState(null);
+      const [emailInput, setEmailInput] = useState("");
+      const [passwordInput, setPasswordInput] = useState("");
+      const [loginError, setLoginError] = useState("");
+      const [loggingIn, setLoggingIn] = useState(false);
+      const [submitting, setSubmitting] = useState(false);
+      const [submitError, setSubmitError] = useState("");
+      const [remoteRecords, setRemoteRecords] = useState([]);
+      const [loadingRecords, setLoadingRecords] = useState(false);
+
+      const update = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
+
+      const captureGps = () => {
+        setGpsStatus("loading");
+        if (!navigator.geolocation) {
+          setGpsStatus("error");
+          return;
+        }
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            setGps({
+              lat: pos.coords.latitude.toFixed(5),
+              lng: pos.coords.longitude.toFixed(5),
+            });
+            setGpsStatus("ok");
+          },
+          () => setGpsStatus("error"),
+          { timeout: 8000 }
+        );
+      };
+
+      const handleLogin = async () => {
+        if (!emailInput || !passwordInput) {
+          setLoginError("Preencha e-mail e senha.");
+          return;
+        }
+        setLoggingIn(true);
+        setLoginError("");
+        try {
+          const res = await supabaseFetch("/auth/v1/token?grant_type=password", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email: emailInput, password: passwordInput }),
+          });
+          const data = await res.json();
+          setAccessToken(data.access_token);
+          setAuthenticated(true);
+          setPasswordInput("");
+        } catch (err) {
+          setLoginError("E-mail ou senha incorretos.");
+        } finally {
+          setLoggingIn(false);
+        }
+      };
+
+      const fetchRecords = async (token) => {
+        setLoadingRecords(true);
+        try {
+          const res = await supabaseFetch("/rest/v1/registros_patio?select=*&order=enviado_em.desc", {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          const data = await res.json();
+          setRemoteRecords(data);
+        } catch (err) {
+          setRemoteRecords([]);
+        } finally {
+          setLoadingRecords(false);
+        }
+      };
+
+      useEffect(() => {
+        if (authenticated && accessToken) fetchRecords(accessToken);
+      }, [authenticated, accessToken]);
+
+      const requiredFields = [
+        "produto",
+        "chegada",
+        "saida",
+        "descarga",
+        "nfe",
+        "cte",
+        "viagem",
+        "transportadora",
+        "motorista",
+        "placa",
+        "origem",
+        "destino",
+      ];
+
+      const handleSubmit = async () => {
+        const missing = requiredFields.filter((k) => !form[k]);
+        if (!file) missing.push("anexo");
+        if (missing.length) {
+          setErrors(missing);
+          return;
+        }
+        setErrors([]);
+        setSubmitError("");
+        setSubmitting(true);
+
+        try {
+          if (gpsStatus !== "ok") captureGps();
+
+          let filePath = null;
+          if (file) {
+            filePath = `${Date.now()}_${file.name.replace(/\s+/g, "_")}`;
+            await supabaseFetch(`/storage/v1/object/comprovantes/${filePath}`, {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+                "Content-Type": file.type || "application/pdf",
+              },
+              body: file,
+            });
+          }
+
+          const payload = {
+            produto: form.produto,
+            chegada: new Date(form.chegada).toISOString(),
+            saida: new Date(form.saida).toISOString(),
+            descarga: new Date(form.descarga).toISOString(),
+            nfe: form.nfe,
+            cte: form.cte,
+            viagem: form.viagem,
+            transportadora: form.transportadora,
+            motorista: form.motorista,
+            placa: form.placa,
+            origem: form.origem,
+            destino: form.destino,
+            motivo: form.motivo,
+            arquivo_url: filePath,
+            gps_lat: gps?.lat ? Number(gps.lat) : null,
+            gps_lng: gps?.lng ? Number(gps.lng) : null,
+          };
+
+          const res = await supabaseFetch("/rest/v1/registros_patio", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+              "Content-Type": "application/json",
+              Prefer: "return=representation",
+            },
+            body: JSON.stringify(payload),
+          });
+          const [inserted] = await res.json();
+
+          const ticket = {
+            numero: String(inserted.numero).padStart(5, "0"),
+            enviadoEm: new Date(inserted.enviado_em).toLocaleString("pt-BR"),
+            gps,
+            arquivo: file ? file.name : "(nenhum anexo)",
+            ...form,
+          };
+          setLastTicket(ticket);
+          setHistory((h) => [ticket, ...h].slice(0, 5));
+          setForm(EMPTY_FORM);
+          setFile(null);
+          setGps(null);
+          setGpsStatus("idle");
+          if (fileInputRef.current) fileInputRef.current.value = "";
+        } catch (err) {
+          setSubmitError("Erro: " + (err.message || String(err)));
+        } finally {
+          setSubmitting(false);
+        }
+      };
+
+      const selectedProduct = PRODUCTS.find((p) => p.id === form.produto);
+
+      const inputStyle = {
+        background: "#FFFFFF",
+        border: `1.5px solid ${RULE}`,
+        color: INK,
+      };
+
+      return (
+        <div style={{ background: PAGE_BG }} className="min-h-screen w-full flex justify-center px-4 py-8">
+          <div className="w-full max-w-md">
+            {/* Header */}
+            <div className="mb-6 text-center">
+              <h1 style={{ color: INK, fontWeight: "600" }} className="text-3xl uppercase mb-1">
+                Controle de Pátio
+              </h1>
+              <p style={{ color: INK_SOFT }} className="text-sm">
+                Registro de estadia · carga de grãos e fertilizante
+              </p>
+            </div>
+
+            {/* Tab switcher */}
+            <div style={{ background: "#E2DFD3", border: `1px solid ${RULE}` }} className="flex rounded-md p-1 mb-6">
+              <button
+                onClick={() => setView("motorista")}
+                className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded text-sm font-medium transition-all"
+                style={{
+                  background: view === "motorista" ? CARD_BG : "transparent",
+                  color: view === "motorista" ? INK : INK_SOFT,
+                }}
+              >
+                🚚 Motorista
+              </button>
+              <button
+                onClick={() => setView("gestor")}
+                className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded text-sm font-medium transition-all"
+                style={{
+                  background: view === "gestor" ? CARD_BG : "transparent",
+                  color: view === "gestor" ? INK : INK_SOFT,
+                }}
+              >
+                📊 Painel
+              </button>
+            </div>
+
+            {/* Login gate */}
+            {view === "gestor" && !authenticated && (
+              <div className="relative mb-6">
+                <Perforation top />
+                <div style={{ background: CARD_BG, border: `1px solid ${RULE}` }} className="rounded-lg px-5 py-8 flex flex-col items-center text-center">
+                  <h2 style={{ color: INK, fontWeight: "600" }} className="text-lg mb-1">
+                    ÁREA DO GESTOR
+                  </h2>
+                  <p style={{ color: INK_SOFT }} className="text-xs mb-5">
+                    Entre com o login cadastrado para ver todos os registros
+                  </p>
+                  <input
+                    type="email"
+                    placeholder="E-mail"
+                    value={emailInput}
+                    onChange={(e) => {
+                      setEmailInput(e.target.value);
+                      setLoginError("");
+                    }}
+                    className="w-full rounded-md px-3 py-2.5 text-center mb-2"
+                    style={inputStyle}
+                  />
+                  <input
+                    type="password"
+                    placeholder="Senha"
+                    value={passwordInput}
+                    onChange={(e) => {
+                      setPasswordInput(e.target.value);
+                      setLoginError("");
+                    }}
+                    onKeyDown={(e) => e.key === "Enter" && handleLogin()}
+                    className="w-full rounded-md px-3 py-2.5 text-center mb-3"
+                    style={inputStyle}
+                  />
+                  {loginError && <p style={{ color: "#A8442B" }} className="text-xs mb-3">{loginError}</p>}
+                  <button
+                    onClick={handleLogin}
+                    disabled={loggingIn}
+                    className="w-full rounded-md py-3 font-semibold text-white"
+                    style={{ background: "#3F6B4F", opacity: loggingIn ? 0.7 : 1 }}
+                  >
+                    {loggingIn ? "ENTRANDO..." : "ENTRAR"}
+                  </button>
+                </div>
+                <Perforation />
+              </div>
+            )}
+
+            {/* Manager panel */}
+            {view === "gestor" && authenticated && (
+              <div className="relative mb-6">
+                <Perforation top />
+                <div style={{ background: CARD_BG, border: `1px solid ${RULE}` }} className="rounded-lg px-5 pt-6 pb-6">
+                  <div className="flex items-center justify-between mb-5">
+                    <h2 style={{ color: INK, fontWeight: "600" }} className="text-lg">
+                      PAINEL GESTOR
+                    </h2>
+                    <button onClick={() => { setAuthenticated(false); setAccessToken(null); setView("motorista"); }} className="text-xs" style={{ color: INK_SOFT }}>
+                      Sair
+                    </button>
+                  </div>
+
+                  {loadingRecords ? (
+                    <p style={{ color: INK_SOFT }} className="text-center py-8 text-sm">
+                      Carregando registros...
+                    </p>
+                  ) : remoteRecords.length === 0 ? (
+                    <p style={{ color: INK_SOFT }} className="text-center py-8 text-sm">
+                      Nenhum registro enviado ainda.
+                    </p>
+                  ) : (
+                    <div className="space-y-2">
+                      {remoteRecords.map((h) => (
+                        <div key={h.id} className="rounded-md px-3 py-3" style={{ background: "#FFFFFF", border: `1px solid ${RULE}` }}>
+                          <p style={{ color: INK }} className="text-sm">
+                            {h.transportadora} · {h.motorista} · {h.placa}
+                          </p>
+                          <p style={{ color: INK_SOFT }} className="text-[11px] mt-0.5">
+                            {h.origem} → {h.destino} · NFe {h.nfe} · CTe {h.cte}
+                          </p>
+                          {h.motivo && <p style={{ color: INK_SOFT }} className="text-[11px] mt-1 italic">Motivo: {h.motivo}</p>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <Perforation />
+              </div>
+            )}
+
+            {/* Form */}
+            {view === "motorista" && (
+              <div className="relative mb-6">
+                <Perforation top />
+                <div style={{ background: CARD_BG, border: `1px solid ${RULE}` }} className="rounded-lg px-5 pt-7 pb-6">
+                  <div className="mb-5">
+                    <p className="text-xs uppercase mb-2" style={{ color: INK_SOFT }}>
+                      Tipo de produto
+                    </p>
+                    <div className="grid grid-cols-3 gap-2">
+                      {PRODUCTS.map((p) => (
+                        <button
+                          key={p.id}
+                          onClick={() => setForm((f) => ({ ...f, produto: p.id }))}
+                          className="flex flex-col items-center gap-1.5 py-3 rounded-md"
+                          style={{
+                            background: form.produto === p.id ? p.color : "#FFFFFF",
+                            border: `1.5px solid ${form.produto === p.id ? p.color : RULE}`,
+                          }}
+                        >
+                          <span style={{ color: form.produto === p.id ? "#FFFFFF" : INK }} className="text-[11px] font-medium">
+                            {p.label}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Fields */}
+                  {["chegada", "saida", "descarga", "nfe", "cte", "viagem", "transportadora", "motorista", "placa", "origem", "destino"].map((field) => (
+                    <div key={field} className="mb-4">
+                      <label className="block text-xs uppercase mb-1.5" style={{ color: INK_SOFT }}>
+                        {field === "chegada"
+                          ? "Chegada"
+                          : field === "saida"
+                          ? "Saída"
+                          : field === "descarga"
+                          ? "Data e hora da descarga"
+                          : field === "nfe"
+                          ? "Número da NFe"
+                          : field === "cte"
+                          ? "Número do CTe"
+                          : field === "viagem"
+                          ? "Nº da viagem contratada"
+                          : field === "transportadora"
+                          ? "Transportadora"
+                          : field === "motorista"
+                          ? "Motorista"
+                          : field === "placa"
+                          ? "Placa"
+                          : field === "origem"
+                          ? "Origem"
+                          : "Destino"}
+                      </label>
+                      <input
+                        type={field.includes("chegada") || field.includes("saida") || field.includes("descarga") ? "datetime-local" : "text"}
+                        value={form[field]}
+                        onChange={update(field)}
+                        className="w-full rounded-md px-3 py-2.5"
+                        style={inputStyle}
+                      />
+                    </div>
+                  ))}
+
+                  <div className="mb-4">
+                    <label className="block text-xs uppercase mb-1.5" style={{ color: INK_SOFT }}>
+                      Motivo de parada
+                    </label>
+                    <textarea rows={2} value={form.motivo} onChange={update("motivo")} className="w-full rounded-md px-3 py-2.5" style={{ ...inputStyle, resize: "none" }} />
+                  </div>
+
+                  <label className="block mb-4">
+                    <span className="text-xs uppercase mb-1.5 block" style={{ color: INK_SOFT }}>
+                      Anexo PDF *
+                    </span>
+                    <div className="flex items-center justify-between rounded-md px-3 py-2.5" style={inputStyle}>
+                      <span className="text-sm truncate" style={{ color: file ? INK : INK_SOFT }}>
+                        {file ? file.name : "Toque para anexar..."}
+                      </span>
+                    </div>
+                    <input ref={fileInputRef} type="file" accept="application/pdf" onChange={(e) => setFile(e.target.files?.[0] || null)} style={{ position: "absolute", width: 1, height: 1, opacity: 0 }} />
+                  </label>
+
+                  {errors.length > 0 && <p style={{ background: "#F3E1DA", color: "#A8442B" }} className="rounded-md px-3 py-2.5 mb-4 text-sm">Preencha todos os campos obrigatórios.</p>}
+                  {submitError && <p style={{ background: "#F3E1DA", color: "#A8442B" }} className="rounded-md px-3 py-2.5 mb-4 text-sm">{submitError}</p>}
+
+                  <button onClick={handleSubmit} disabled={submitting} className="w-full rounded-md py-3 font-semibold text-white" style={{ background: selectedProduct ? selectedProduct.color : "#3F6B4F", opacity: submitting ? 0.7 : 1 }}>
+                    {submitting ? "ENVIANDO..." : "ENVIAR REGISTRO"}
+                  </button>
+                </div>
+                <Perforation />
+              </div>
+            )}
+
+            {/* Confirmation */}
+            {lastTicket && (
+              <div className="relative mb-6">
+                <Perforation top />
+                <div style={{ background: "#DFE6DE", border: "1px solid #3F6B4F" }} className="rounded-lg px-5 py-6">
+                  <p style={{ color: "#3F6B4F", fontWeight: "600" }} className="text-sm mb-3">
+                    ✓ REGISTRO Nº {lastTicket.numero} ENVIADO
+                  </p>
+                  <ul style={{ color: "#2B4030" }} className="text-[13px] space-y-1">
+                    <li>→ Enviado em {lastTicket.enviadoEm}</li>
+                    <li>→ Arquivo: {lastTicket.arquivo}</li>
+                    {lastTicket.gps && <li>→ GPS: {lastTicket.gps.lat}, {lastTicket.gps.lng}</li>}
+                  </ul>
+                </div>
+                <Perforation />
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<PatioApp />);
+  </script>
+</body>
+</html>
